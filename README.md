@@ -1,6 +1,6 @@
 # zot-review
 
-Structured repo-wide code review for zot.
+Structured repo-wide code review for [zot](https://www.zot.sh).
 
 ## Install
 
