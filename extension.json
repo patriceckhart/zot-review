@@ -1,0 +1,8 @@
+{
+  "name": "zot-review",
+  "version": "1.0.0",
+  "exec": "./zot-review",
+  "language": "go",
+  "description": "Structured repo-wide code review: map feature slices, persist findings, triage, and render a Markdown report.",
+  "enabled": true
+}
