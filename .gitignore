@@ -1,0 +1,4 @@
+/zot-review
+*.test
+*.out
+.DS_Store

@@ -11,12 +11,16 @@ zot ext install https://github.com/patriceckhart/zot-review
 Or from a local checkout:
 
 ```bash
-go build -o zot-review .
 mkdir -p "$HOME/Library/Application Support/zot/extensions/zot-review"
-cp extension.json zot-review "$HOME/Library/Application Support/zot/extensions/zot-review/"
+cp -R . "$HOME/Library/Application Support/zot/extensions/zot-review/"
 ```
 
 Restart zot after installing or updating.
+
+## Requirements
+
+- Go 1.22+ on `$PATH` (the extension runs from source via `go run .`, no
+  prebuilt binary is shipped). Install Go from <https://go.dev/dl>.
 
 ## Usage
 
