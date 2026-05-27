@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/patriceckhart/zot/pkg/zotext"
+	"github.com/patriceckhart/zot/packages/agent/ext"
 )
 
 const stateDirName = ".codereview"
@@ -49,55 +49,55 @@ type Feature struct {
 // ---------- main ----------
 
 func main() {
-	ext := zotext.New("zot-review", "1.0.0")
+	e := ext.New("zot-review", "1.0.0")
 
 	// --- slash commands ---
 
-	ext.Command("review", "kick off a repo-wide structured code review", func(args string) zotext.Response {
+	e.Command("review", "kick off a repo-wide structured code review", func(args string) ext.Response {
 		scope := strings.TrimSpace(args)
 		if scope == "" {
 			scope = "the entire repository"
 		}
-		return zotext.Prompt(reviewPrompt(scope))
+		return ext.Prompt(reviewPrompt(scope))
 	})
 
-	ext.Command("review-report", "open the findings report in a panel", func(args string) zotext.Response {
-		report, err := renderPanelReport(projectRoot(ext))
+	e.Command("review-report", "open the findings report in a panel", func(args string) ext.Response {
+		report, err := renderPanelReport(projectRoot(e))
 		if err != nil {
-			return zotext.Errorf("report failed: %v", err)
+			return ext.Errorf("report failed: %v", err)
 		}
 		if report == "" {
-			return zotext.Display("no findings recorded yet. Run /review to start one.")
+			return ext.Display("no findings recorded yet. Run /review to start one.")
 		}
-		return zotext.OpenPanel("zot-review-report", "Code review findings", panelLines(report), "Esc/q close")
+		return ext.OpenPanel("zot-review-report", "Code review findings", panelLines(report), "Esc/q close")
 	})
 
-	ext.Command("review-next", "open the next open finding in a panel", func(args string) zotext.Response {
-		f, err := nextOpenFinding(projectRoot(ext))
+	e.Command("review-next", "open the next open finding in a panel", func(args string) ext.Response {
+		f, err := nextOpenFinding(projectRoot(e))
 		if err != nil {
-			return zotext.Errorf("next failed: %v", err)
+			return ext.Errorf("next failed: %v", err)
 		}
 		if f == nil {
-			return zotext.Display("no open findings. Nice.")
+			return ext.Display("no open findings. Nice.")
 		}
-		return zotext.OpenPanel("zot-review-next", "Next code review finding", panelLines(formatFindingDetail(*f)), "Esc/q close")
+		return ext.OpenPanel("zot-review-next", "Next code review finding", panelLines(formatFindingDetail(*f)), "Esc/q close")
 	})
 
 	// --- tools ---
 
-	ext.Tool("map_features",
+	e.Tool("map_features",
 		"Detect coarse feature slices in the current repository (languages, frameworks, top-level packages, apps, routes). Returns a JSON array. Use this as the first step of a structured review so you know what to look at.",
 		json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
-		func(args json.RawMessage) zotext.ToolResult {
-			feats, err := mapFeatures(projectRoot(ext))
+		func(args json.RawMessage) ext.ToolResult {
+			feats, err := mapFeatures(projectRoot(e))
 			if err != nil {
-				return zotext.TextErrorResult(fmt.Sprintf("map_features: %v", err))
+				return ext.TextErrorResult(fmt.Sprintf("map_features: %v", err))
 			}
 			b, _ := json.MarshalIndent(feats, "", "  ")
-			return zotext.TextResult(string(b))
+			return ext.TextResult(string(b))
 		})
 
-	ext.Tool("record_finding",
+	e.Tool("record_finding",
 		"Persist a code-review finding under .codereview/findings/. Use this whenever you spot a real, actionable issue (bug, security, correctness, dead code, broken contract). Skip nitpicks and style.",
 		json.RawMessage(`{
 			"type":"object",
@@ -112,7 +112,7 @@ func main() {
 			"required":["feature","title","severity"],
 			"additionalProperties":false
 		}`),
-		func(args json.RawMessage) zotext.ToolResult {
+		func(args json.RawMessage) ext.ToolResult {
 			var in struct {
 				Feature    string `json:"feature"`
 				Title      string `json:"title"`
@@ -122,7 +122,7 @@ func main() {
 				Suggestion string `json:"suggestion"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
-				return zotext.TextErrorResult("invalid args: " + err.Error())
+				return ext.TextErrorResult("invalid args: " + err.Error())
 			}
 			f := Finding{
 				ID:         newID(),
@@ -136,13 +136,13 @@ func main() {
 				CreatedAt:  time.Now().UTC(),
 				UpdatedAt:  time.Now().UTC(),
 			}
-			if err := saveFinding(projectRoot(ext), f); err != nil {
-				return zotext.TextErrorResult(err.Error())
+			if err := saveFinding(projectRoot(e), f); err != nil {
+				return ext.TextErrorResult(err.Error())
 			}
-			return zotext.TextResult(fmt.Sprintf("recorded finding %s (%s, %s): %s", f.ID, f.Severity, f.Feature, f.Title))
+			return ext.TextResult(fmt.Sprintf("recorded finding %s (%s, %s): %s", f.ID, f.Severity, f.Feature, f.Title))
 		})
 
-	ext.Tool("list_findings",
+	e.Tool("list_findings",
 		"List recorded findings, optionally filtered by status or severity. Returns JSON.",
 		json.RawMessage(`{
 			"type":"object",
@@ -152,15 +152,15 @@ func main() {
 			},
 			"additionalProperties":false
 		}`),
-		func(args json.RawMessage) zotext.ToolResult {
+		func(args json.RawMessage) ext.ToolResult {
 			var in struct {
 				Status   string `json:"status"`
 				Severity string `json:"severity"`
 			}
 			_ = json.Unmarshal(args, &in)
-			findings, err := loadFindings(projectRoot(ext))
+			findings, err := loadFindings(projectRoot(e))
 			if err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
 			out := make([]Finding, 0, len(findings))
 			for _, f := range findings {
@@ -173,10 +173,10 @@ func main() {
 				out = append(out, f)
 			}
 			b, _ := json.MarshalIndent(out, "", "  ")
-			return zotext.TextResult(string(b))
+			return ext.TextResult(string(b))
 		})
 
-	ext.Tool("show_finding",
+	e.Tool("show_finding",
 		"Return one finding by id with full evidence and note history.",
 		json.RawMessage(`{
 			"type":"object",
@@ -184,22 +184,22 @@ func main() {
 			"required":["id"],
 			"additionalProperties":false
 		}`),
-		func(args json.RawMessage) zotext.ToolResult {
+		func(args json.RawMessage) ext.ToolResult {
 			var in struct {
 				ID string `json:"id"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
-			f, err := loadFinding(projectRoot(ext), in.ID)
+			f, err := loadFinding(projectRoot(e), in.ID)
 			if err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
 			b, _ := json.MarshalIndent(f, "", "  ")
-			return zotext.TextResult(string(b))
+			return ext.TextResult(string(b))
 		})
 
-	ext.Tool("triage_finding",
+	e.Tool("triage_finding",
 		"Update the status of a finding and optionally append a note.",
 		json.RawMessage(`{
 			"type":"object",
@@ -211,73 +211,73 @@ func main() {
 			"required":["id","status"],
 			"additionalProperties":false
 		}`),
-		func(args json.RawMessage) zotext.ToolResult {
+		func(args json.RawMessage) ext.ToolResult {
 			var in struct {
 				ID     string `json:"id"`
 				Status string `json:"status"`
 				Note   string `json:"note"`
 			}
 			if err := json.Unmarshal(args, &in); err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
-			f, err := loadFinding(projectRoot(ext), in.ID)
+			f, err := loadFinding(projectRoot(e), in.ID)
 			if err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
 			f.Status = in.Status
 			f.UpdatedAt = time.Now().UTC()
 			if in.Note != "" {
 				f.Notes = append(f.Notes, Note{At: time.Now().UTC(), Text: in.Note})
 			}
-			if err := saveFinding(projectRoot(ext), f); err != nil {
-				return zotext.TextErrorResult(err.Error())
+			if err := saveFinding(projectRoot(e), f); err != nil {
+				return ext.TextErrorResult(err.Error())
 			}
-			return zotext.TextResult(fmt.Sprintf("triaged %s -> %s", f.ID, f.Status))
+			return ext.TextResult(fmt.Sprintf("triaged %s -> %s", f.ID, f.Status))
 		})
 
-	ext.Tool("next_finding",
+	e.Tool("next_finding",
 		"Return the next open finding to work on, severity-ordered (critical > high > medium > low), oldest first within a severity. Empty result means no open work.",
 		json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
-		func(args json.RawMessage) zotext.ToolResult {
-			f, err := nextOpenFinding(projectRoot(ext))
+		func(args json.RawMessage) ext.ToolResult {
+			f, err := nextOpenFinding(projectRoot(e))
 			if err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
 			if f == nil {
-				return zotext.TextResult("{}")
+				return ext.TextResult("{}")
 			}
 			b, _ := json.MarshalIndent(f, "", "  ")
-			return zotext.TextResult(string(b))
+			return ext.TextResult(string(b))
 		})
 
-	ext.Tool("render_report",
+	e.Tool("render_report",
 		"Render all findings as a Markdown report and return the text. Pass write=true to also write it to .codereview/reports/report-<ts>.md.",
 		json.RawMessage(`{
 			"type":"object",
 			"properties":{"write":{"type":"boolean"}},
 			"additionalProperties":false
 		}`),
-		func(args json.RawMessage) zotext.ToolResult {
+		func(args json.RawMessage) ext.ToolResult {
 			var in struct {
 				Write bool `json:"write"`
 			}
 			_ = json.Unmarshal(args, &in)
-			report, err := renderReport(projectRoot(ext))
+			report, err := renderReport(projectRoot(e))
 			if err != nil {
-				return zotext.TextErrorResult(err.Error())
+				return ext.TextErrorResult(err.Error())
 			}
 			if in.Write {
-				path, err := writeReport(projectRoot(ext), report)
+				path, err := writeReport(projectRoot(e), report)
 				if err != nil {
-					return zotext.TextErrorResult(err.Error())
+					return ext.TextErrorResult(err.Error())
 				}
-				return zotext.TextResult(report + "\n\n_wrote " + path + "_")
+				return ext.TextResult(report + "\n\n_wrote " + path + "_")
 			}
-			return zotext.TextResult(report)
+			return ext.TextResult(report)
 		})
 
-	if err := ext.Run(); err != nil {
-		ext.Logf("fatal: %v", err)
+	if err := e.Run(); err != nil {
+		e.Logf("fatal: %v", err)
 		os.Exit(1)
 	}
 }
@@ -402,8 +402,8 @@ func exists(p string) bool {
 
 // ---------- state on disk ----------
 
-func projectRoot(ext *zotext.Extension) string {
-	if cwd := ext.Host().CWD; cwd != "" {
+func projectRoot(e *ext.Extension) string {
+	if cwd := e.Host().CWD; cwd != "" {
 		return cwd
 	}
 	wd, err := os.Getwd()
