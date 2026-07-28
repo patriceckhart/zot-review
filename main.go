@@ -5,9 +5,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -46,10 +50,14 @@ type Feature struct {
 	Description string   `json:"description,omitempty"`
 }
 
+type Config struct {
+	MapFeaturesCommand string `json:"map_features_command"`
+}
+
 // ---------- main ----------
 
 func main() {
-	e := ext.New("zot-review", "1.0.0")
+	e := ext.New("zot-review", "1.1.0")
 
 	// --- slash commands ---
 
@@ -82,6 +90,21 @@ func main() {
 		}
 		return ext.OpenPanel("zot-review-next", "Next code review finding", panelLines(formatFindingDetail(*f)), "Esc/q close")
 	})
+
+	e.Command("triage", "update a finding: /triage <id> <status> [note]", func(args string) ext.Response {
+		id, status, note, err := parseTriageArgs(args)
+		if err != nil {
+			return ext.Errorf("triage: %v", err)
+		}
+		f, err := triageFinding(projectRoot(e), id, status, note)
+		if err != nil {
+			return ext.Errorf("triage: %v", err)
+		}
+		return ext.Display(fmt.Sprintf("triaged %s -> %s", f.ID, f.Status))
+	})
+
+	registerPanelCloseKey(e, "zot-review-report")
+	registerPanelCloseKey(e, "zot-review-next")
 
 	// --- tools ---
 
@@ -220,16 +243,8 @@ func main() {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return ext.TextErrorResult(err.Error())
 			}
-			f, err := loadFinding(projectRoot(e), in.ID)
+			f, err := triageFinding(projectRoot(e), in.ID, in.Status, in.Note)
 			if err != nil {
-				return ext.TextErrorResult(err.Error())
-			}
-			f.Status = in.Status
-			f.UpdatedAt = time.Now().UTC()
-			if in.Note != "" {
-				f.Notes = append(f.Notes, Note{At: time.Now().UTC(), Text: in.Note})
-			}
-			if err := saveFinding(projectRoot(e), f); err != nil {
 				return ext.TextErrorResult(err.Error())
 			}
 			return ext.TextResult(fmt.Sprintf("triaged %s -> %s", f.ID, f.Status))
@@ -283,6 +298,14 @@ func main() {
 }
 
 // ---------- prompts ----------
+
+func registerPanelCloseKey(e *ext.Extension, panelID string) {
+	e.OnPanelKey(panelID, func(key, text string) {
+		if key == "rune" && strings.EqualFold(text, "q") {
+			e.ClosePanel(panelID)
+		}
+	}, nil)
+}
 
 func reviewPrompt(scope string) string {
 	return strings.TrimSpace(`
@@ -369,10 +392,133 @@ func mapFeatures(root string) ([]Feature, error) {
 		add(Feature{Name: "readme", Kind: "docs", Roots: []string{"README.md"}})
 	}
 
+	custom, err := mapCustomFeatures(root)
+	if err != nil {
+		return nil, err
+	}
+	feats = append(feats, custom...)
+
 	if len(feats) == 0 {
 		add(Feature{Name: "repo", Kind: "fallback", Roots: []string{"."}, Description: "no recognised project markers; review by directory"})
 	}
 	return feats, nil
+}
+
+const (
+	customMapTimeout  = 30 * time.Second
+	customMapMaxBytes = 1 << 20
+	customMapMaxLines = 500
+)
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	remaining := b.limit - b.Len()
+	if remaining <= 0 {
+		return 0, fmt.Errorf("output exceeds %d bytes", b.limit)
+	}
+	if len(p) > remaining {
+		_, _ = b.Buffer.Write(p[:remaining])
+		return remaining, fmt.Errorf("output exceeds %d bytes", b.limit)
+	}
+	return b.Buffer.Write(p)
+}
+
+func loadConfig(root string) (Config, error) {
+	path := filepath.Join(root, stateDirName, "config.json")
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return Config{}, nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func mapCustomFeatures(root string) ([]Feature, error) {
+	cfg, err := loadConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	command := strings.TrimSpace(cfg.MapFeaturesCommand)
+	if command == "" {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), customMapTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Dir = root
+	cmd.WaitDelay = 2 * time.Second
+	stdout := &limitedBuffer{limit: customMapMaxBytes}
+	stderr := &limitedBuffer{limit: customMapMaxBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("custom map_features command timed out after %s", customMapTimeout)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.TrimSpace(stdout.String()) == "" && strings.TrimSpace(stderr.String()) == "" {
+			return nil, nil
+		}
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return nil, fmt.Errorf("custom map_features command failed: %w: %s", err, detail)
+		}
+		return nil, fmt.Errorf("custom map_features command failed: %w", err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		return nil, nil
+	}
+	var features []Feature
+	if json.Unmarshal([]byte(output), &features) == nil {
+		return features, nil
+	}
+
+	lines := strings.Split(output, "\n")
+	if len(lines) > customMapMaxLines {
+		return nil, fmt.Errorf("custom map_features command returned %d lines, maximum is %d", len(lines), customMapMaxLines)
+	}
+	features = make([]Feature, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		feature := Feature{
+			Name:        fmt.Sprintf("custom:%d", len(features)+1),
+			Kind:        "custom",
+			Description: line,
+		}
+		if path := customFeaturePath(root, line); path != "" {
+			feature.Roots = []string{path}
+		}
+		features = append(features, feature)
+	}
+	return features, nil
+}
+
+func customFeaturePath(root string, line string) string {
+	path := line
+	if i := strings.IndexByte(path, ':'); i >= 0 {
+		path = path[:i]
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) || !exists(filepath.Join(root, path)) {
+		return ""
+	}
+	return filepath.ToSlash(path)
 }
 
 func subdirs(path string) []string {
@@ -401,6 +547,50 @@ func exists(p string) bool {
 }
 
 // ---------- state on disk ----------
+
+func parseTriageArgs(args string) (id string, status string, note string, err error) {
+	fields := strings.Fields(args)
+	if len(fields) < 2 {
+		return "", "", "", fmt.Errorf("usage: /triage <id> <open|fixed|false-positive|wontfix> [note]")
+	}
+	id, status = fields[0], fields[1]
+	if len(fields) > 2 {
+		note = strings.Join(fields[2:], " ")
+	}
+	if !validFindingStatus(status) {
+		return "", "", "", fmt.Errorf("invalid status %q; use open, fixed, false-positive, or wontfix", status)
+	}
+	return id, status, note, nil
+}
+
+func validFindingStatus(status string) bool {
+	switch status {
+	case "open", "fixed", "false-positive", "wontfix":
+		return true
+	default:
+		return false
+	}
+}
+
+func triageFinding(root string, id string, status string, note string) (Finding, error) {
+	if !validFindingStatus(status) {
+		return Finding{}, fmt.Errorf("invalid finding status %q", status)
+	}
+	f, err := loadFinding(root, id)
+	if err != nil {
+		return Finding{}, err
+	}
+	now := time.Now().UTC()
+	f.Status = status
+	f.UpdatedAt = now
+	if note != "" {
+		f.Notes = append(f.Notes, Note{At: now, Text: note})
+	}
+	if err := saveFinding(root, f); err != nil {
+		return Finding{}, err
+	}
+	return f, nil
+}
 
 func projectRoot(e *ext.Extension) string {
 	if cwd := e.Host().CWD; cwd != "" {
@@ -432,6 +622,9 @@ func ensureStateDirs(root string) (string, error) {
 }
 
 func saveFinding(root string, f Finding) error {
+	if !validFindingID(f.ID) {
+		return fmt.Errorf("invalid finding id %q", f.ID)
+	}
 	dir, err := ensureStateDirs(root)
 	if err != nil {
 		return err
@@ -445,6 +638,9 @@ func saveFinding(root string, f Finding) error {
 }
 
 func loadFinding(root string, id string) (Finding, error) {
+	if !validFindingID(id) {
+		return Finding{}, fmt.Errorf("invalid finding id %q", id)
+	}
 	dir, err := ensureStateDirs(root)
 	if err != nil {
 		return Finding{}, err
@@ -459,6 +655,18 @@ func loadFinding(root string, id string) (Finding, error) {
 		return Finding{}, err
 	}
 	return f, nil
+}
+
+func validFindingID(id string) bool {
+	if !strings.HasPrefix(id, "f_") {
+		return false
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func loadFindings(root string) ([]Finding, error) {

@@ -45,6 +45,7 @@ Other commands:
 ```text
 /review-next
 /review-report
+/triage f_20260723161433_5828 false-positive not actionable
 ```
 
 | Command | Action |
@@ -52,6 +53,7 @@ Other commands:
 | `/review [scope]` | Start a structured code review for the current project or scope |
 | `/review-next` | Open the next open finding, ordered by severity, in a panel |
 | `/review-report` | Open a colored, TUI-friendly findings report in a panel |
+| `/triage <id> <status> [note]` | Mark a finding as `open`, `fixed`, `false-positive`, or `wontfix` |
 
 ## Findings and reports
 
@@ -59,11 +61,24 @@ Review state is stored in the reviewed project directory:
 
 ```text
 <project>/.codereview/
+  config.json       # optional custom feature mapper
   findings/*.json
   reports/*.md
 ```
 
-The panel report is optimized for zot's UI. Saved report files are Markdown and are written when the agent calls `render_report` with `write=true`, which `/review` asks it to do at the end of a review.
+The panel report is optimized for zot's UI. Press `q`, Esc, or Ctrl+C to close a findings panel. Saved report files are Markdown and are written when the agent calls `render_report` with `write=true`, which `/review` asks it to do at the end of a review.
+
+## Custom feature mapping
+
+A project can augment automatic feature detection with a shell command in `.codereview/config.json`:
+
+```json
+{
+  "map_features_command": "rg '^\\s*(?:local\\s+)?function\\s+[A-Za-z0-9_:.]+\\s*\\(' -g '*.lua'"
+}
+```
+
+The command runs from the reviewed project root when `map_features` is called. Plain-text output becomes one custom feature per non-empty line. A command can instead print a JSON array matching the `Feature` shape for structured names, kinds, roots, and descriptions. Commands have a 30-second timeout and bounded output. Only use project configuration you trust because the command runs through the system shell.
 
 ## Tools
 
@@ -71,7 +86,7 @@ The extension also registers LLM-callable tools:
 
 | Tool | Action |
 |------|--------|
-| `map_features` | Detect coarse project slices: languages, frameworks, apps, packages, docs |
+| `map_features` | Detect coarse project slices and run the configured custom mapper, if any |
 | `record_finding` | Persist a real, actionable finding |
 | `list_findings` | List findings, optionally filtered by status or severity |
 | `show_finding` | Show one finding by id |
