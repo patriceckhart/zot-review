@@ -277,18 +277,7 @@ func main() {
 				Write bool `json:"write"`
 			}
 			_ = json.Unmarshal(args, &in)
-			report, err := renderReport(projectRoot(e))
-			if err != nil {
-				return ext.TextErrorResult(err.Error())
-			}
-			if in.Write {
-				path, err := writeReport(projectRoot(e), report)
-				if err != nil {
-					return ext.TextErrorResult(err.Error())
-				}
-				return ext.TextResult(report + "\n\n_wrote " + path + "_")
-			}
-			return ext.TextResult(report)
+			return reportToolResult(projectRoot(e), in.Write)
 		})
 
 	if err := e.Run(); err != nil {
@@ -721,6 +710,21 @@ func nextOpenFinding(root string) (*Finding, error) {
 }
 
 // ---------- reporting ----------
+
+func reportToolResult(root string, write bool) ext.ToolResult {
+	report, err := renderReport(root)
+	if err != nil {
+		return ext.TextErrorResult(err.Error())
+	}
+	if write {
+		path, err := writeReport(root, report)
+		if err != nil {
+			return ext.TextErrorResult(err.Error())
+		}
+		return ext.MarkdownResult(report + "\n\n_wrote " + path + "_")
+	}
+	return ext.MarkdownResult(report)
+}
 
 func renderReport(root string) (string, error) {
 	findings, err := loadFindings(root)

@@ -66,7 +66,30 @@ Review state is stored in the reviewed project directory:
   reports/*.md
 ```
 
-The panel report is optimized for zot's UI. Press `q`, Esc, or Ctrl+C to close a findings panel. Saved report files are Markdown and are written when the agent calls `render_report` with `write=true`, which `/review` asks it to do at the end of a review.
+The `render_report` tool opts into zot's Markdown tool-result rendering.
+Markdown display requires a zot build containing commit `60f3e43` or later.
+Older zot builds display the report as plain text. The extension pins an SDK
+version containing `ext.MarkdownResult`, so no local workspace is required.
+Saved reports remain Markdown, and the panel report is optimized for zot's UI. Press `q`, Esc, or Ctrl+C to close a findings panel. Saved report files are Markdown and are written when the agent calls `render_report` with `write=true`, which `/review` asks it to do at the end of a review.
+
+## Local development
+
+To test SDK changes against a local zot checkout, optionally use a Go
+workspace. With `zot-review` and `zot` in the same parent directory, create a
+local, gitignored `go.work`:
+
+```go
+go 1.26.3
+
+use (
+    .
+    ../zot
+)
+```
+
+Run the extension from this checkout with a zot binary built from the matching
+zot checkout. The workspace is local development configuration and is not
+included when installing the extension from GitHub.
 
 ## Custom feature mapping
 
